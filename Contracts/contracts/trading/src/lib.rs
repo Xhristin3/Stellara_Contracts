@@ -1,6 +1,7 @@
 #![no_std]
 use shared::fees::FeeManager;
 use shared::governance::{GovernanceManager, GovernanceRole, UpgradeProposal};
+use shared::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitBreakerState, PauseLevel};
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol};
 
 /// Version of this contract implementation
@@ -17,7 +18,6 @@ mod storage_keys {
     pub const ROLES: Symbol = symbol_short!("roles");
     pub const STATS: Symbol = symbol_short!("stats");
     pub const VERSION: Symbol = symbol_short!("ver");
-    pub const PAUSE: Symbol = symbol_short!("pause");
     pub const TRADE_COUNT: Symbol = symbol_short!("t_cnt");
 }
 
@@ -82,6 +82,7 @@ impl UpgradeableTradingContract {
         admin: Address,
         approvers: soroban_sdk::Vec<Address>,
         executor: Address,
+        cb_config: CircuitBreakerConfig,
     ) -> Result<(), TradeError> {
         // Check if already initialized
         if env.storage().persistent().has(&storage_keys::INIT) {
@@ -110,6 +111,9 @@ impl UpgradeableTradingContract {
         storage.set(&storage_keys::VERSION, &CONTRACT_VERSION);
         storage.set(&storage_keys::TRADE_COUNT, &0u64);
 
+        // Initialize circuit breaker
+        CircuitBreaker::init(&env, cb_config);
+
         Ok(())
     }
 
@@ -134,10 +138,11 @@ impl UpgradeableTradingContract {
 
         let storage = env.storage().persistent();
 
-        // Check pause state - single storage read
-        if storage.get(&storage_keys::PAUSE).unwrap_or(false) {
-            return Err(TradeError::ContractPaused);
-        }
+        // Check pause state via CircuitBreaker
+        CircuitBreaker::require_not_paused(&env, symbol_short!("trade"));
+
+        // Track activity for automatic circuit breaker
+        CircuitBreaker::track_activity(&env, amount);
 
         // Collect fee after validation but before state changes
         FeeManager::collect_fee(&env, &fee_token, &trader, &fee_recipient, fee_amount)
@@ -230,19 +235,48 @@ impl UpgradeableTradingContract {
         trades
     }
 
-    /// Pause the contract (admin only) - OPTIMIZED
-    pub fn pause(env: Env, admin: Address) -> Result<(), TradeError> {
+    /// Set circuit breaker pause level (admin only)
+    pub fn set_pause_level(env: Env, admin: Address, level: PauseLevel) -> Result<(), TradeError> {
         admin.require_auth();
-        Self::require_admin_role(&env, &admin)?;
-        env.storage().persistent().set(&storage_keys::PAUSE, &true);
+        CircuitBreaker::set_pause_level(&env, admin, level);
         Ok(())
     }
 
-    /// Unpause the contract (admin only) - OPTIMIZED
+    /// Pause specific function (admin only)
+    pub fn pause_function(env: Env, admin: Address, func_name: Symbol) -> Result<(), TradeError> {
+        admin.require_auth();
+        CircuitBreaker::pause_function(&env, admin, func_name);
+        Ok(())
+    }
+
+    /// Unpause specific function (admin only)
+    pub fn unpause_function(env: Env, admin: Address, func_name: Symbol) -> Result<(), TradeError> {
+        admin.require_auth();
+        CircuitBreaker::unpause_function(&env, admin, func_name);
+        Ok(())
+    }
+
+    /// Get current circuit breaker state
+    pub fn get_cb_state(env: Env) -> CircuitBreakerState {
+        CircuitBreaker::get_state(&env)
+    }
+
+    /// Get current circuit breaker config
+    pub fn get_cb_config(env: Env) -> CircuitBreakerConfig {
+        CircuitBreaker::get_config(&env)
+    }
+
+    /// (LEGACY) Pause the contract - map to Full pause
+    pub fn pause(env: Env, admin: Address) -> Result<(), TradeError> {
+        admin.require_auth();
+        CircuitBreaker::set_pause_level(&env, admin, PauseLevel::Full);
+        Ok(())
+    }
+
+    /// (LEGACY) Unpause the contract - map to None pause
     pub fn unpause(env: Env, admin: Address) -> Result<(), TradeError> {
         admin.require_auth();
-        Self::require_admin_role(&env, &admin)?;
-        env.storage().persistent().set(&storage_keys::PAUSE, &false);
+        CircuitBreaker::set_pause_level(&env, admin, PauseLevel::None);
         Ok(())
     }
 

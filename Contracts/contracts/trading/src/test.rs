@@ -2,6 +2,7 @@
 
 use super::*;
 use shared::governance::ProposalStatus;
+use shared::circuit_breaker::{CircuitBreakerConfig, PauseLevel};
 use soroban_sdk::{
     symbol_short,
     testutils::{Address as _, Ledger},
@@ -29,8 +30,14 @@ fn setup_contract(
     let mut approvers = Vec::new(env);
     approvers.push_back(approver.clone());
 
+    let cb_config = CircuitBreakerConfig {
+        max_volume_per_period: 10_000_000i128,
+        max_tx_count_per_period: 10u64,
+        period_duration: 3600u64,
+    };
+
     env.mock_all_auths();
-    client.init(&admin, &approvers, &executor);
+    client.init(&admin, &approvers, &executor, &cb_config);
 
     (client, admin, approver, executor)
 }
@@ -48,10 +55,16 @@ fn test_contract_initialization() {
     let approver = Address::generate(&env);
     let executor = Address::generate(&env);
 
+    let cb_config = CircuitBreakerConfig {
+        max_volume_per_period: 10_000_000i128,
+        max_tx_count_per_period: 10u64,
+        period_duration: 3600u64,
+    };
+
     let mut approvers = Vec::new(&env);
     approvers.push_back(approver.clone());
 
-    client.init(&admin, &approvers, &executor);
+    client.init(&admin, &approvers, &executor, &cb_config);
 
     let version = client.get_version();
     assert_eq!(version, 1);
@@ -70,14 +83,20 @@ fn test_contract_cannot_be_initialized_twice() {
     let approver = Address::generate(&env);
     let executor = Address::generate(&env);
 
+    let cb_config = CircuitBreakerConfig {
+        max_volume_per_period: 10_000_000i128,
+        max_tx_count_per_period: 10u64,
+        period_duration: 3600u64,
+    };
+
     let mut approvers = Vec::new(&env);
     approvers.push_back(approver.clone());
 
     // First initialization should succeed
-    client.init(&admin, &approvers, &executor);
+    client.init(&admin, &approvers, &executor, &cb_config);
 
     // Second initialization should panic/fail
-    let result = client.try_init(&admin, &approvers, &executor);
+    let result = client.try_init(&admin, &approvers, &executor, &cb_config);
     assert!(result.is_err());
 }
 
@@ -123,7 +142,13 @@ fn test_upgrade_proposal_approval_flow() {
     approvers.push_back(approver1.clone());
     approvers.push_back(approver2.clone());
 
-    client.init(&admin, &approvers, &executor);
+    let cb_config = CircuitBreakerConfig {
+        max_volume_per_period: 10_000_000i128,
+        max_tx_count_per_period: 10u64,
+        period_duration: 3600u64,
+    };
+
+    client.init(&admin, &approvers, &executor, &cb_config);
 
     let new_hash = symbol_short!("v2hash");
     let description = symbol_short!("Upgrade");
@@ -258,7 +283,13 @@ fn test_multi_sig_protection() {
     approvers.push_back(approver2.clone());
     approvers.push_back(approver3.clone());
 
-    client.init(&admin, &approvers, &executor);
+    let cb_config = CircuitBreakerConfig {
+        max_volume_per_period: 10_000_000i128,
+        max_tx_count_per_period: 10u64,
+        period_duration: 3600u64,
+    };
+
+    client.init(&admin, &approvers, &executor, &cb_config);
 
     let proposal_id = client.propose_upgrade(
         &admin,
@@ -539,4 +570,83 @@ fn test_optimized_storage_scaling() {
     let trade_10 = client.get_trade(&10u64);
     assert!(trade_10.is_some());
     assert_eq!(trade_10.unwrap().id, 10);
+}
+
+#[test]
+fn test_automatic_circuit_breaker() {
+    let env = Env::default();
+    env.ledger().with_mut(|li| li.timestamp = 1000);
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, UpgradeableTradingContract);
+    let client = UpgradeableTradingContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let approver = Address::generate(&env);
+    let executor = Address::generate(&env);
+    let mut approvers = Vec::new(&env);
+    approvers.push_back(approver);
+
+    // Set low thresholds for testing
+    let cb_config = CircuitBreakerConfig {
+        max_volume_per_period: 2_000_000i128, // 2 BTC
+        max_tx_count_per_period: 2,           // Max 2 trades
+        period_duration: 3600u64,
+    };
+
+    client.init(&admin, &approvers, &executor, &cb_config);
+
+    let trader = Address::generate(&env);
+    let fee_recipient = Address::generate(&env);
+    let token_id = env.register_stellar_asset_contract(fee_recipient.clone());
+
+    // Trade 1: Should work
+    client.trade(&trader, &symbol_short!("BTC"), &1_000_000i128, &50_000i128, &true, &token_id, &0, &fee_recipient);
+    
+    // Trade 2: Should work, but hits TX threshold
+    client.trade(&trader, &symbol_short!("BTC"), &500_000i128, &50_000i128, &true, &token_id, &0, &fee_recipient);
+    
+    // Trade 3: Should fail because TX threshold was hit in Trade 2
+    let result = client.try_trade(&trader, &symbol_short!("BTC"), &100_000i128, &50_000i128, &true, &token_id, &0, &fee_recipient);
+    assert!(result.is_err());
+
+    // Check state
+    let state = client.get_cb_state();
+    assert_eq!(state.pause_level, PauseLevel::Full);
+    assert_eq!(state.current_period_tx_count, 2);
+
+    // Unpause by admin
+    client.set_pause_level(&admin, &PauseLevel::None);
+
+    // Trade 4: Should work now
+    client.trade(&trader, &symbol_short!("BTC"), &100_000i128, &50_000i128, &true, &token_id, &0, &fee_recipient);
+}
+
+#[test]
+fn test_partial_pause_function() {
+    let env = Env::default();
+    env.ledger().with_mut(|li| li.timestamp = 1000);
+    env.mock_all_auths();
+
+    let (client, admin, _approver, _executor) = setup_contract(&env);
+
+    let trader = Address::generate(&env);
+    let fee_recipient = Address::generate(&env);
+    let token_id = env.register_stellar_asset_contract(fee_recipient.clone());
+
+    // Pause only "trade" function
+    client.pause_function(&admin, &symbol_short!("trade"));
+
+    // Trade should fail
+    let result = client.try_trade(&trader, &symbol_short!("BTC"), &1_000_000i128, &50_000i128, &true, &token_id, &0, &fee_recipient);
+    assert!(result.is_err());
+
+    // Other functions like get_stats should still work
+    let _stats = client.get_stats();
+
+    // Unpause trade
+    client.unpause_function(&admin, &symbol_short!("trade"));
+    
+    // Trade should work
+    client.trade(&trader, &symbol_short!("BTC"), &1_000_000i128, &50_000i128, &true, &token_id, &0, &fee_recipient);
 }

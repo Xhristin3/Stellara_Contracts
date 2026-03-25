@@ -1,6 +1,7 @@
 #![no_std]
 
 use shared::governance::{GovernanceManager, GovernanceRole, UpgradeProposal};
+use shared::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitBreakerState, PauseLevel};
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, Address, Env, Map, String, Symbol, Vec,
 };
@@ -123,6 +124,7 @@ impl UpgradeableMessagingContract {
         admin: Address,
         approvers: Vec<Address>,
         executor: Address,
+        cb_config: CircuitBreakerConfig,
     ) -> Result<(), MessagingError> {
         let init_key = symbol_short!("init");
         if env.storage().persistent().has(&init_key) {
@@ -154,6 +156,9 @@ impl UpgradeableMessagingContract {
             .persistent()
             .set(&symbol_short!("ver"), &CONTRACT_VERSION);
 
+        // Initialize circuit breaker
+        CircuitBreaker::init(&env, cb_config);
+
         Ok(())
     }
 
@@ -165,6 +170,12 @@ impl UpgradeableMessagingContract {
     ) -> Result<u64, MessagingError> {
         sender.require_auth();
         require_initialized(&env)?;
+
+        // Check pause state via CircuitBreaker
+        CircuitBreaker::require_not_paused(&env, symbol_short!("send_m"));
+
+        // Track activity (1 message = 1 unit volume)
+        CircuitBreaker::track_activity(&env, 1);
 
         if sender == recipient {
             return Err(MessagingError::InvalidRecipient);
@@ -402,6 +413,37 @@ impl UpgradeableMessagingContract {
 
         GovernanceManager::cancel_proposal(&env, proposal_id, admin)
             .map_err(|_| MessagingError::Unauthorized)
+    }
+
+    /// Set circuit breaker pause level (admin only)
+    pub fn set_cb_pause_level(env: Env, admin: Address, level: PauseLevel) -> Result<(), MessagingError> {
+        admin.require_auth();
+        CircuitBreaker::set_pause_level(&env, admin, level);
+        Ok(())
+    }
+
+    /// Pause specific function (admin only)
+    pub fn pause_cb_function(env: Env, admin: Address, func_name: Symbol) -> Result<(), MessagingError> {
+        admin.require_auth();
+        CircuitBreaker::pause_function(&env, admin, func_name);
+        Ok(())
+    }
+
+    /// Unpause specific function (admin only)
+    pub fn unpause_cb_function(env: Env, admin: Address, func_name: Symbol) -> Result<(), MessagingError> {
+        admin.require_auth();
+        CircuitBreaker::unpause_function(&env, admin, func_name);
+        Ok(())
+    }
+
+    /// Get current circuit breaker state
+    pub fn get_cb_state(env: Env) -> CircuitBreakerState {
+        CircuitBreaker::get_state(&env)
+    }
+
+    /// Get current circuit breaker config
+    pub fn get_cb_config(env: Env) -> CircuitBreakerConfig {
+        CircuitBreaker::get_config(&env)
     }
 }
 

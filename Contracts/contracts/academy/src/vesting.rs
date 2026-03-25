@@ -1,4 +1,5 @@
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env};
+use shared::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitBreakerState, PauseLevel};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol};
 
 /// Vesting schedule for an academy reward
 #[contracttype]
@@ -92,6 +93,7 @@ impl AcademyVestingContract {
         admin: Address,
         reward_token: Address,
         governance: Address,
+        cb_config: CircuitBreakerConfig,
     ) -> Result<(), VestingError> {
         // Check if already initialized
         let init_key = symbol_short!("init");
@@ -114,9 +116,17 @@ impl AcademyVestingContract {
         let gov_key = symbol_short!("gov");
         env.storage().persistent().set(&gov_key, &governance);
 
+        // Store roles for shared GovernanceManager compatibility
+        let mut roles = soroban_sdk::Map::new(&env);
+        roles.set(admin.clone(), shared::governance::GovernanceRole::Admin);
+        env.storage().persistent().set(&symbol_short!("roles"), &roles);
+
         // Initialize grant counter
         let counter_key = symbol_short!("cnt");
         env.storage().persistent().set(&counter_key, &0u64);
+
+        // Initialize circuit breaker
+        CircuitBreaker::init(&env, cb_config);
 
         Ok(())
     }
@@ -132,6 +142,9 @@ impl AcademyVestingContract {
         duration: u64,
     ) -> Result<u64, VestingError> {
         admin.require_auth();
+
+        // Check pause state via CircuitBreaker
+        CircuitBreaker::require_not_paused(&env, symbol_short!("grant"));
 
         // Verify caller is admin
         let admin_key = symbol_short!("admin");
@@ -206,6 +219,9 @@ impl AcademyVestingContract {
     pub fn claim(env: Env, grant_id: u64, beneficiary: Address) -> Result<i128, VestingError> {
         beneficiary.require_auth();
 
+        // Check pause state via CircuitBreaker
+        CircuitBreaker::require_not_paused(&env, symbol_short!("claim"));
+
         // Get vesting schedule
         let schedules_key = symbol_short!("sched");
         let mut schedules: soroban_sdk::Map<u64, VestingSchedule> = env
@@ -234,6 +250,9 @@ impl AcademyVestingContract {
         // Calculate vested amount
         let current_time = env.ledger().timestamp();
         let vested_amount = Self::calculate_vested_amount(&schedule, current_time)?;
+
+        // Track activity for automatic circuit breaker
+        CircuitBreaker::track_activity(&env, vested_amount);
 
         if vested_amount == 0 {
             return Err(VestingError::NotVested);
@@ -287,6 +306,9 @@ impl AcademyVestingContract {
         revoke_delay: u64,
     ) -> Result<(), VestingError> {
         admin.require_auth();
+
+        // Check pause state via CircuitBreaker
+        CircuitBreaker::require_not_paused(&env, symbol_short!("revoke"));
 
         // Verify caller is admin
         let admin_key = symbol_short!("admin");
@@ -438,5 +460,42 @@ impl AcademyVestingContract {
             .ok_or(VestingError::Unauthorized)?;
 
         Ok((admin, token, governance))
+    }
+
+    /// Set circuit breaker pause level (admin only)
+    pub fn set_cb_pause_level(env: Env, admin: Address, level: PauseLevel) -> Result<(), VestingError> {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().persistent().get(&symbol_short!("admin")).ok_or(VestingError::Unauthorized)?;
+        if admin != stored_admin { return Err(VestingError::Unauthorized); }
+        CircuitBreaker::set_pause_level(&env, admin, level);
+        Ok(())
+    }
+
+    /// Pause specific function (admin only)
+    pub fn pause_cb_function(env: Env, admin: Address, func_name: Symbol) -> Result<(), VestingError> {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().persistent().get(&symbol_short!("admin")).ok_or(VestingError::Unauthorized)?;
+        if admin != stored_admin { return Err(VestingError::Unauthorized); }
+        CircuitBreaker::pause_function(&env, admin, func_name);
+        Ok(())
+    }
+
+    /// Unpause specific function (admin only)
+    pub fn unpause_cb_function(env: Env, admin: Address, func_name: Symbol) -> Result<(), VestingError> {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().persistent().get(&symbol_short!("admin")).ok_or(VestingError::Unauthorized)?;
+        if admin != stored_admin { return Err(VestingError::Unauthorized); }
+        CircuitBreaker::unpause_function(&env, admin, func_name);
+        Ok(())
+    }
+
+    /// Get current circuit breaker state
+    pub fn get_cb_state(env: Env) -> CircuitBreakerState {
+        CircuitBreaker::get_state(&env)
+    }
+
+    /// Get current circuit breaker config
+    pub fn get_cb_config(env: Env) -> CircuitBreakerConfig {
+        CircuitBreaker::get_config(&env)
     }
 }

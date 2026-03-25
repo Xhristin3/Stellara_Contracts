@@ -12,6 +12,7 @@ pub struct ContractConfig {
 
 pub mod fees;
 pub mod governance;
+pub mod circuit_breaker;
 
 /// Standard contract error codes
 pub mod errors {
