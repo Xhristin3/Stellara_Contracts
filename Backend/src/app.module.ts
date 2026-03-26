@@ -13,6 +13,7 @@ import { IndexAnalysisModule } from './index-analysis/index-analysis.module';
 import { LifecycleModule } from './lifecycle/lifecycle.module';
 import { LoggingModule } from './logging/logging.module';
 import { Module } from '@nestjs/common';
+import { PaymentModule } from './payment/payment.module';
 import { PrismaModule } from './prisma.module';
 import { QuotaModule } from './quota/quota.module';
 import { RabbitmqModule } from './messaging/rabbitmq/rabbitmq.module';
@@ -70,6 +71,7 @@ import { validateEnv } from './config/env.validation';
     IndexAnalysisModule,
     AuthModule,
     WebsocketModule,
+    PaymentModule,
     // Backup and disaster recovery module
     BackupModule,
     QuotaModule,
@@ -82,4 +84,4 @@ import { validateEnv } from './config/env.validation';
   controllers: [AppController, UserController, DocsController],
   providers: [AppService],
 })
-export class AppModule {}
+export class AppModule { }
