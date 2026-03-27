@@ -39,7 +39,9 @@
     "backup:cleanup": "ts-node scripts/cleanup-backups.ts",
     "dr:drill": "ts-node scripts/dr-drill.ts",
     "deploy:blue-green": "ts-node scripts/blue-green-deploy.ts",
-    "deploy:rollback": "ts-node scripts/blue-green-rollback.ts"
+    "deploy:rollback": "ts-node scripts/blue-green-rollback.ts",
+    "secrets:setup": "ts-node scripts/setup-secrets.ts",
+    "secrets:test": "ts-node scripts/test-secrets.ts"
   },
   "dependencies": {
     "@aws-sdk/client-secrets-manager": "^3.1016.0",
