@@ -78,8 +78,10 @@ export class IndexerService implements OnModuleInit, OnModuleDestroy {
     this.retryDelayMs = this.configService.get<number>('INDEXER_RETRY_DELAY_MS', 1000);
 
     // Initialize RPC client with primary endpoint
+    const rpcTimeout = this.configService.get<number>('STELLAR_RPC_TIMEOUT_MS', 10000);
     this.rpc = new SorobanRpc.Server(this.rpcEndpoints[0], {
       allowHttp: this.rpcEndpoints[0].startsWith('http://'),
+      timeout: rpcTimeout,
     });
 
     // Initialize circuit breaker for RPC calls
