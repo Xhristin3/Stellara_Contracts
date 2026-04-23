@@ -15,6 +15,7 @@ import { CompetitionModule } from './competition/competition.module';
 import { CorrelationIdMiddleware } from './common/middleware/correlation-id.middleware';
 import { LoggingMiddleware } from './common/middleware/logging.middleware';
 import { ApiVersionMiddleware } from './common/middleware/api-version.middleware';
+import { TimeoutMiddleware } from './common/middleware/timeout.middleware';
 import { AppLogger } from './common/logger/app.logger';
 import { AppCacheModule } from './cache/cache.module';
 import { V1Module } from './modules/v1/v1.module';
@@ -52,12 +53,12 @@ import { V2Module } from './modules/v2/v2.module';
     V2Module,
   ],
   controllers: [AppController],
-  providers: [AppService, AppLogger, ApiVersionMiddleware],
+  providers: [AppService, AppLogger, ApiVersionMiddleware, TimeoutMiddleware],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {
     consumer
-      .apply(CorrelationIdMiddleware, LoggingMiddleware, ApiVersionMiddleware)
+      .apply(CorrelationIdMiddleware, LoggingMiddleware, ApiVersionMiddleware, TimeoutMiddleware)
       .forRoutes('*');
   }
 }
