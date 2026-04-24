@@ -1,11 +1,12 @@
-import { ReputationActivity, ActivityType } from '@prisma/client';
+import { ReputationActivity } from '@prisma/client';
 import {
   FACTOR_WEIGHTS,
   MAX_SCORE,
   MIN_ACTIVITY_THRESHOLD,
   MIN_SCORE,
+  ActivityType,
 } from '../reputation.constants';
-import { timeDecayWeight } from './decay.calculator';
+import { activityDecayWeight } from './decay.calculator';
 
 // ---------------------------------------------------------------------------
 // Intermediate result types
@@ -47,7 +48,7 @@ export function calcSuccessRateScore(activities: ReputationActivity[], now: Date
   let weightedTotal = 0;
 
   for (const tx of transactions) {
-    const w = timeDecayWeight(tx.occurredAt, now);
+    const w = activityDecayWeight(tx.occurredAt, tx.activityType, now);
     weightedTotal += w;
     if (tx.activityType === ActivityType.SUCCESSFUL_TRANSACTION) {
       weightedSuccess += w;
@@ -71,7 +72,7 @@ export function calcPeerRatingScore(activities: ReputationActivity[], now: Date)
   let weightedTotal = 0;
 
   for (const r of ratings) {
-    const w = timeDecayWeight(r.occurredAt, now);
+    const w = activityDecayWeight(r.occurredAt, r.activityType, now);
     weightedSum += Number(r.value) * w;
     weightedTotal += w;
   }
@@ -103,7 +104,7 @@ export function calcContributionSizeScore(activities: ReputationActivity[], now:
 
   let weightedValue = 0;
   for (const a of relevant) {
-    weightedValue += Number(a.value) * timeDecayWeight(a.occurredAt, now);
+    weightedValue += Number(a.value) * activityDecayWeight(a.occurredAt, a.activityType, now);
   }
 
   // SCALE_CAP: a user with this much weighted contribution value earns 100.
@@ -132,7 +133,7 @@ export function calcCommunityFeedbackScore(activities: ReputationActivity[], now
     let wSum = 0,
       wTotal = 0;
     for (const r of reviews) {
-      const w = timeDecayWeight(r.occurredAt, now);
+      const w = activityDecayWeight(r.occurredAt, r.activityType, now);
       wSum += Number(r.value) * w;
       wTotal += w;
     }
@@ -145,7 +146,7 @@ export function calcCommunityFeedbackScore(activities: ReputationActivity[], now
     let wWon = 0,
       wLost = 0;
     for (const d of disputes) {
-      const w = timeDecayWeight(d.occurredAt, now);
+      const w = activityDecayWeight(d.occurredAt, d.activityType, now);
       if (d.activityType === ActivityType.DISPUTE_WON) wWon += w;
       else wLost += w;
     }

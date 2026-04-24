@@ -65,4 +65,22 @@ export class ReputationController {
       breakdown,
     };
   }
+
+  @Get(':id/reputation/decay-history')
+  @ApiOperation({ summary: 'Get reputation decay history for user' })
+  @ApiParam({ name: 'id', description: 'User ID' })
+  @ApiResponse({ status: 200, description: 'Decay history returned' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  async getDecayHistory(@Param('id') id: string) {
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const decayHistory = await this.reputationService.getDecayHistory(id);
+    return {
+      userId: id,
+      decayHistory,
+    };
+  }
 }

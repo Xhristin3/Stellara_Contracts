@@ -151,6 +151,23 @@ model ReputationScore {
   @@map("reputation_scores")
 }
 
+model ReputationDecayHistory {
+  id              String   @id @default(cuid())
+  userId          String   @map("user_id")
+  previousScore   Int      @map("previous_score")
+  newScore        Int      @map("new_score")
+  scoreChange     Int      @map("score_change")
+  decayFactor     Decimal  @map("decay_factor") @db.Decimal(6, 4)
+  activitiesCount Int      @map("activities_count")
+  exempted        Boolean  @default(false)
+  reason          String
+  occurredAt      DateTime @default(now()) @map("occurred_at")
+
+  @@index([userId])
+  @@index([occurredAt])
+  @@map("reputation_decay_history")
+}
+
 enum ActivityType {
   SUCCESSFUL_TRANSACTION
   FAILED_TRANSACTION
@@ -159,6 +176,10 @@ enum ActivityType {
   DISPUTE_WON
   DISPUTE_LOST
   HIGH_VALUE_CONTRIBUTION
+  PROJECT_COMPLETION
+  MILESTONE_ACHIEVEMENT
+  SOCIAL_INTERACTION
+  HELPFUL_COMMENT
 }
 
 model Category {
@@ -422,6 +443,13 @@ model Auction {
   endTime           DateTime          @map("end_time")
   status            AuctionStatus     @default(ACTIVE)
   winningBidId      String?           @map("winning_bid_id")
+
+  // Relations
+  bids              Bid[]
+
+  @@map("auctions")
+}
+
 // Regenerative Finance Models
 
 model FundingRound {
@@ -463,9 +491,12 @@ model PublicGoodsProject {
   updatedAt         DateTime          @updatedAt @map("updated_at")
 
   // Relations
-  bids              Bid[]
+  roundProjects     FundingRoundProject[]
+  contributions     QuadraticContribution[]
+  impactCertificates ImpactCertificate[]
+  retroactiveFunding RetroactiveFunding[]
 
-  @@map("auctions")
+  @@map("public_goods_projects")
 }
 
 model Bid {
@@ -584,12 +615,6 @@ enum AccountingProvider {
   XERO
   FRESHBOOKS
   WAVE
-  roundProjects     FundingRoundProject[]
-  contributions     QuadraticContribution[]
-  impactCertificates ImpactCertificate[]
-  retroactiveFunding RetroactiveFunding[]
-
-  @@map("public_goods_projects")
 }
 
 model FundingRoundProject {
@@ -777,6 +802,8 @@ enum IntegrationPlatform {
   CLR_FUND
   GITHUB
   DISCORD
+}
+
 // Trading Competition Models
 
 model TradingCompetition {
