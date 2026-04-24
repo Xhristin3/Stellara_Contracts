@@ -1,7 +1,9 @@
-import { Controller, Get, Post, Param, NotFoundException } from '@nestjs/common';
+import { Controller, Get, Post, Param, NotFoundException, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { ReputationService } from './reputation.service';
 import { PrismaService } from '../prisma.service';
+import { ReputationAccessService } from './services/reputation-access.service';
+import { REPUTATION_THRESHOLDS } from './guards/reputation.guard';
 
 @ApiTags('Reputation')
 @Controller('users')
@@ -9,6 +11,7 @@ export class ReputationController {
   constructor(
     private readonly reputationService: ReputationService,
     private readonly prisma: PrismaService,
+    private readonly reputationAccessService: ReputationAccessService,
   ) {}
 
   @Get(':id/reputation')
@@ -81,6 +84,101 @@ export class ReputationController {
     return {
       userId: id,
       decayHistory,
+    };
+  }
+
+  @Get(':id/reputation/access')
+  @ApiOperation({ summary: 'Get user reputation-based access and features' })
+  @ApiParam({ name: 'id', description: 'User ID' })
+  @ApiResponse({ status: 200, description: 'User access information returned' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  async getUserAccess(@Param('id') id: string) {
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const access = await this.reputationAccessService.getUserAccess(id);
+    return {
+      userId: id,
+      access,
+    };
+  }
+
+  @Get(':id/reputation/check-premium')
+  @ApiOperation({ summary: 'Check if user can access premium features' })
+  @ApiParam({ name: 'id', description: 'User ID' })
+  @ApiResponse({ status: 200, description: 'Premium access check result' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  async checkPremiumAccess(@Param('id') id: string) {
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const canAccess = await this.reputationAccessService.canAccessPremium(id);
+    return {
+      userId: id,
+      canAccessPremium: canAccess,
+      requiredScore: REPUTATION_THRESHOLDS.PREMIUM_ACCESS,
+      currentScore: user.reputationScore,
+    };
+  }
+
+  @Get(':id/reputation/check-governance')
+  @ApiOperation({ summary: 'Check if user can participate in governance' })
+  @ApiParam({ name: 'id', description: 'User ID' })
+  @ApiResponse({ status: 200, description: 'Governance eligibility check result' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  async checkGovernanceEligibility(@Param('id') id: string) {
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const canParticipate = await this.reputationAccessService.canParticipateInGovernance(id);
+    return {
+      userId: id,
+      canParticipateInGovernance: canParticipate,
+      requiredScore: REPUTATION_THRESHOLDS.GOVERNANCE_PARTICIPATION,
+      currentScore: user.reputationScore,
+    };
+  }
+
+  @Get(':id/reputation/funding-limit')
+  @ApiOperation({ summary: 'Get dynamic funding limit based on reputation' })
+  @ApiParam({ name: 'id', description: 'User ID' })
+  @ApiResponse({ status: 200, description: 'Funding limit returned' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  async getFundingLimit(@Param('id') id: string) {
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const fundingLimit = this.reputationAccessService.calculateFundingLimit(user.reputationScore);
+    return {
+      userId: id,
+      reputationScore: user.reputationScore,
+      maxFundingLimit: fundingLimit,
+      accessLevel: this.reputationAccessService.getAccessLevel(user.reputationScore),
+    };
+  }
+
+  @Get('reputation/thresholds')
+  @ApiOperation({ summary: 'Get all reputation thresholds and requirements' })
+  @ApiResponse({ status: 200, description: 'Reputation thresholds returned' })
+  async getReputationThresholds() {
+    return {
+      thresholds: REPUTATION_THRESHOLDS,
+      description: {
+        BASIC_ACCESS: 'Default access level for all users',
+        ENHANCED_ACCESS: 'Access to enhanced analytics and priority support',
+        PREMIUM_ACCESS: 'Access to premium features and advanced tools',
+        GOVERNANCE_PARTICIPATION: 'Eligible to participate in governance voting',
+        ELITE_ACCESS: 'Access to elite features and VIP support',
+        HIGH_VALUE_FUNDING: 'Higher funding limits for trusted users',
+      },
     };
   }
 }
